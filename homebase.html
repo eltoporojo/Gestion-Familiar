@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HomeBase</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0f0f14;
+    --surface: #16161f;
+    --surface2: #1e1e2a;
+    --border: #2a2a3d;
+    --accent: #7c6dfa;
+    --accent-dark: #5040d0;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e8e8f0;
+    --muted: #6b7280;
+    --radius: 14px;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+
+  .hidden { display: none !important; }
+
+  /* ── SPINNER ── */
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeUp {
+    from { opacity:0; transform:translateY(16px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── LOADING ── */
+  #loading-screen {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px; z-index: 999;
+  }
+  .logo-text {
+    font-size: 1.5rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--text), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+
+  /* ── AUTH ── */
+  #auth-screen {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    background: radial-gradient(ellipse at 50% 0%, rgba(124,109,250,0.12) 0%, transparent 60%);
+  }
+  .auth-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 24px; padding: 40px; width: 100%; max-width: 420px;
+  }
+  .auth-logo { text-align: center; margin-bottom: 32px; }
+  .auth-logo .emoji { font-size: 3rem; display: block; margin-bottom: 8px; }
+  .auth-logo h1 {
+    font-size: 2rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--text), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .auth-logo p { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
+  .auth-tabs {
+    display: flex; background: var(--surface2);
+    border-radius: 10px; padding: 4px; margin-bottom: 24px;
+  }
+  .auth-tab {
+    flex: 1; padding: 8px; border: none; background: none;
+    color: var(--muted); font-size: 0.9rem;
+    border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s;
+  }
+  .auth-tab.active { background: var(--accent); color: white; }
+
+  /* ── FORMS ── */
+  .form-group { margin-bottom: 16px; }
+  label {
+    display: block; font-size: 0.8rem; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  input, select, textarea {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text); padding: 12px 16px;
+    font-size: 0.95rem; transition: border-color 0.2s; outline: none; font-family: inherit;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
+
+  /* ── BUTTONS ── */
+  .btn {
+    padding: 12px 20px; border: none; border-radius: 10px;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    transition: all 0.2s; font-family: inherit;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn-primary { background: var(--accent); color: white; width: 100%; }
+  .btn-primary:hover { background: var(--accent-dark); transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-danger { background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3); color: var(--red); width: 100%; }
+  .btn-danger:hover { background: rgba(248,113,113,0.25); }
+  .w-full { width: 100%; }
+  .mt-4 { margin-top: 16px; }
+
+  /* ── ALERTS ── */
+  .alert { padding: 12px 16px; border-radius: 10px; font-size: 0.85rem; margin-bottom: 16px; }
+  .alert-error  { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--red); }
+  .alert-success { background: rgba(74,222,128,0.1);  border: 1px solid rgba(74,222,128,0.3);  color: var(--green); }
+  .alert-info   { background: rgba(124,109,250,0.1); border: 1px solid rgba(124,109,250,0.3); color: var(--accent); }
+
+  /* ── FAMILY SETUP ── */
+  #family-screen {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .family-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 24px; padding: 40px; width: 100%; max-width: 480px;
+  }
+  .family-option {
+    padding: 20px; border: 2px solid var(--border); border-radius: var(--radius);
+    cursor: pointer; transition: all 0.2s; margin-bottom: 12px;
+  }
+  .family-option:hover { border-color: var(--accent); background: var(--surface2); }
+  .family-option.selected { border-color: var(--accent); background: rgba(124,109,250,0.08); }
+  .opt-title { font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .opt-desc { font-size: 0.82rem; color: var(--muted); }
+
+  /* ── APP ── */
+  #app-screen { display: none; min-height: 100vh; flex-direction: column; }
+
+  .topbar {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 20px; height: 60px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 50;
+  }
+  .topbar-logo {
+    font-size: 1.2rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--text), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .family-badge {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 20px; padding: 4px 12px;
+    font-size: 0.8rem; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+  .avatar {
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: white; cursor: pointer; flex-shrink: 0;
+  }
+
+  .bottom-nav {
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+  }
+  .nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 0; cursor: pointer; transition: all 0.2s;
+    border: none; background: none; color: var(--muted);
+  }
+  .nav-item.active { color: var(--accent); }
+  .nav-icon { font-size: 1.4rem; }
+  .nav-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .main-content { flex: 1; padding: 20px; padding-bottom: 80px; overflow-y: auto; }
+
+  /* ── DASHBOARD ── */
+  .page-title { font-size: 1.5rem; font-weight: 800; margin-bottom: 4px; }
+  .page-subtitle { color: var(--muted); font-size: 0.875rem; margin-bottom: 20px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-value { font-size: 1.6rem; font-weight: 800; }
+  .stat-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+  .section-title {
+    font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--muted); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::after { content:''; flex:1; height:1px; background:var(--border); }
+
+  .members-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+  .member-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .member-name { font-weight: 600; }
+  .member-role { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 20px; }
+  .role-admin  { background: rgba(124,109,250,0.2); color: var(--accent); }
+  .role-member { background: var(--surface2); color: var(--muted); }
+
+  .invite-box {
+    background: linear-gradient(135deg, rgba(124,109,250,0.1), rgba(124,109,250,0.05));
+    border: 1px solid rgba(124,109,250,0.3); border-radius: var(--radius); padding: 16px; margin-bottom: 20px;
+  }
+  .invite-code {
+    font-size: 1.8rem; font-weight: 800; letter-spacing: 4px;
+    color: var(--accent); text-align: center; font-family: monospace; margin: 8px 0;
+  }
+
+  /* ── PROFILE ── */
+  .profile-header { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 28px; text-align: center; }
+  .avatar-large { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: 800; color: white; }
+  .color-picker { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .color-dot { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: transform 0.2s; }
+  .color-dot:hover { transform: scale(1.2); }
+  .color-dot.selected { border-color: white; }
+  .profile-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+  .profile-section-title { font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+
+  .tags-container { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 4px 10px; font-size: 0.8rem; display: flex; align-items: center; gap: 6px; }
+  .tag-remove { cursor: pointer; color: var(--muted); }
+  .tag-remove:hover { color: var(--red); }
+
+  /* ── COMING SOON ── */
+  .coming-soon { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; gap: 12px; }
+  .coming-soon .cs-icon { font-size: 3rem; }
+  .coming-soon h3 { font-size: 1.1rem; font-weight: 700; }
+  .coming-soon p { color: var(--muted); font-size: 0.875rem; max-width: 260px; line-height: 1.5; }
+  .cs-badge { background: rgba(124,109,250,0.15); border: 1px solid rgba(124,109,250,0.3); color: var(--accent); font-size: 0.75rem; font-weight: 700; padding: 4px 12px; border-radius: 20px; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+    display: flex; align-items: flex-end; justify-content: center;
+    z-index: 200; opacity: 0; pointer-events: none; transition: opacity 0.3s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 24px 24px 0 0;
+    padding: 24px; width: 100%; max-width: 500px;
+    transform: translateY(100%); transition: transform 0.3s; max-height: 80vh; overflow-y: auto;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-handle { width: 40px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 20px; }
+  .modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loading-screen">
+  <div class="spinner"></div>
+  <div class="logo-text">🏠 HomeBase</div>
+</div>
+
+<!-- AUTH -->
+<div id="auth-screen" class="hidden">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <span class="emoji">🏠</span>
+      <h1>HomeBase</h1>
+      <p>Tu gestor familiar inteligente</p>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchTab('login',this)">Entrar</button>
+      <button class="auth-tab" onclick="switchTab('register',this)">Registrarse</button>
+    </div>
+    <div id="auth-alert" class="hidden"></div>
+
+    <!-- LOGIN -->
+    <div id="tab-login">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="tu@email.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Contraseña</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password"
+          onkeydown="if(event.key==='Enter') doLogin()">
+      </div>
+      <button class="btn btn-primary mt-4" onclick="doLogin()" id="btn-login">Entrar</button>
+    </div>
+
+    <!-- REGISTER -->
+    <div id="tab-register" class="hidden">
+      <div class="form-group">
+        <label>Nombre</label>
+        <input type="text" id="reg-name" placeholder="Tu nombre">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="reg-email" placeholder="tu@email.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label>Contraseña</label>
+        <input type="password" id="reg-password" placeholder="Mínimo 6 caracteres" autocomplete="new-password">
+      </div>
+      <button class="btn btn-primary mt-4" onclick="doRegister()" id="btn-register">Crear cuenta</button>
+    </div>
+  </div>
+</div>
+
+<!-- FAMILY SETUP -->
+<div id="family-screen" class="hidden">
+  <div class="family-card">
+    <div style="text-align:center;margin-bottom:28px;">
+      <div style="font-size:2.5rem;margin-bottom:8px;">👨‍👩‍👧‍👦</div>
+      <h2 style="font-size:1.4rem;font-weight:800;">Configura tu familia</h2>
+      <p style="color:var(--muted);font-size:0.875rem;margin-top:4px;">
+        Hola <span id="family-welcome-name" style="color:var(--text);font-weight:600;"></span>, ¿cómo quieres empezar?
+      </p>
+    </div>
+    <div id="family-alert" class="hidden"></div>
+    <div class="family-option selected" id="opt-create" onclick="selectFamilyOption('create')">
+      <div class="opt-title">🏠 Crear nueva familia</div>
+      <div class="opt-desc">Soy el primero. Crearé el hogar e invitaré a mi pareja e hijas.</div>
+    </div>
+    <div class="family-option" id="opt-join" onclick="selectFamilyOption('join')">
+      <div class="opt-title">🔗 Unirme a una familia</div>
+      <div class="opt-desc">Tengo un código de invitación que alguien me ha compartido.</div>
+    </div>
+    <div id="form-create" style="margin-top:16px;">
+      <div class="form-group">
+        <label>Nombre de la familia</label>
+        <input type="text" id="family-name" placeholder="Ej: Familia Hernández">
+      </div>
+    </div>
+    <div id="form-join" class="hidden" style="margin-top:16px;">
+      <div class="form-group">
+        <label>Código de invitación</label>
+        <input type="text" id="invite-code-input" placeholder="Ej: A1B2C3D4"
+          style="text-transform:uppercase;letter-spacing:4px;font-size:1.2rem;text-align:center;">
+      </div>
+    </div>
+    <button class="btn btn-primary mt-4" onclick="doFamilySetup()" id="btn-family">Continuar</button>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app-screen">
+  <div class="topbar">
+    <div class="topbar-logo">🏠 HomeBase</div>
+    <div class="topbar-right">
+      <div class="family-badge">🏡 <span id="topbar-family-name">Mi familia</span></div>
+      <div class="avatar" id="topbar-avatar" onclick="navigateTo('perfil')"
+           style="width:32px;height:32px;font-size:0.85rem;"></div>
+    </div>
+  </div>
+
+  <div class="main-content" id="main-content"></div>
+
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-page="inicio"    onclick="navigateTo('inicio')">   <span class="nav-icon">🏠</span><span class="nav-label">Inicio</span></button>
+    <button class="nav-item"        data-page="gastos"    onclick="navigateTo('gastos')">   <span class="nav-icon">💸</span><span class="nav-label">Gastos</span></button>
+    <button class="nav-item"        data-page="despensa"  onclick="navigateTo('despensa')"> <span class="nav-icon">🥫</span><span class="nav-label">Despensa</span></button>
+    <button class="nav-item"        data-page="compras"   onclick="navigateTo('compras')">  <span class="nav-icon">🛒</span><span class="nav-label">Compras</span></button>
+    <button class="nav-item"        data-page="perfil"    onclick="navigateTo('perfil')">   <span class="nav-icon">👤</span><span class="nav-label">Perfil</span></button>
+  </nav>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal-content">
+    <div class="modal-handle"></div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// CONFIG — sustituye con tus datos
+// ══════════════════════════════════════════
+const SUPABASE_URL  = 'https://hbmgibulmohafyaswcqq.supabase.co/rest/v1/';
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhibWdpYnVsbW9oYWZ5YXN3Y3FxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4Nzg3MTUsImV4cCI6MjA5NTQ1NDcxNX0.ndshsln71E5JI154PsNsdxOWdAEKqe1XfCuwJscvKxo';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+let state = { user:null, profile:null, family:null, members:[], currentPage:'inicio' };
+
+// ══════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════
+async function init() {
+  const { data:{ session } } = await sb.auth.getSession();
+  if (session?.user) { state.user = session.user; await loadUserData(); }
+  else showScreen('auth');
+
+  sb.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session?.user) {
+      state.user = session.user; await loadUserData();
+    } else if (event === 'SIGNED_OUT') {
+      state = { user:null, profile:null, family:null, members:[], currentPage:'inicio' };
+      showScreen('auth');
+    }
+  });
+}
+
+async function loadUserData() {
+  const { data: profile } = await sb.from('profiles').select('*').eq('id', state.user.id).single();
+  state.profile = profile;
+
+  if (!profile?.family_id) {
+    showScreen('family');
+    document.getElementById('family-welcome-name').textContent =
+      profile?.display_name || state.user.email.split('@')[0];
+    return;
+  }
+
+  const { data: family } = await sb.from('families').select('*').eq('id', profile.family_id).single();
+  state.family = family;
+
+  const { data: members } = await sb.from('profiles').select('*').eq('family_id', profile.family_id);
+  state.members = members || [];
+
+  showScreen('app');
+  renderTopbar();
+  navigateTo('inicio');
+}
+
+// ══════════════════════════════════════════
+// SCREENS
+// ══════════════════════════════════════════
+function showScreen(name) {
+  document.getElementById('loading-screen').classList.add('hidden');
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('family-screen').classList.add('hidden');
+  document.getElementById('app-screen').style.display = 'none';
+  if (name === 'auth')   document.getElementById('auth-screen').classList.remove('hidden');
+  if (name === 'family') document.getElementById('family-screen').classList.remove('hidden');
+  if (name === 'app')    document.getElementById('app-screen').style.display = 'flex';
+}
+
+// ══════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════
+function switchTab(tab, btn) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-login').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('tab-register').classList.toggle('hidden', tab !== 'register');
+  document.getElementById('auth-alert').classList.add('hidden');
+}
+
+function showAuthAlert(msg, type='error') {
+  const el = document.getElementById('auth-alert');
+  el.className = `alert alert-${type}`; el.textContent = msg; el.classList.remove('hidden');
+}
+
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  if (!email || !password) { showAuthAlert('Rellena email y contraseña'); return; }
+  const btn = document.getElementById('btn-login');
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) {
+    showAuthAlert(error.message.includes('Invalid') ? 'Email o contraseña incorrectos' : error.message);
+    btn.disabled = false; btn.textContent = 'Entrar';
+  }
+}
+
+async function doRegister() {
+  const name     = document.getElementById('reg-name').value.trim();
+  const email    = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  if (!name || !email || !password) { showAuthAlert('Rellena todos los campos'); return; }
+  if (password.length < 6) { showAuthAlert('La contraseña debe tener al menos 6 caracteres'); return; }
+  const btn = document.getElementById('btn-register');
+  btn.disabled = true; btn.textContent = 'Creando cuenta...';
+  const { error } = await sb.auth.signUp({ email, password, options:{ data:{ display_name: name } } });
+  if (error) { showAuthAlert(error.message); }
+  else { showAuthAlert('¡Cuenta creada! Revisa tu email para verificarla y luego entra.', 'success'); }
+  btn.disabled = false; btn.textContent = 'Crear cuenta';
+}
+
+async function doLogout() { await sb.auth.signOut(); }
+
+// ══════════════════════════════════════════
+// FAMILY SETUP
+// ══════════════════════════════════════════
+let familyOption = 'create';
+
+function selectFamilyOption(opt) {
+  familyOption = opt;
+  document.getElementById('opt-create').classList.toggle('selected', opt === 'create');
+  document.getElementById('opt-join').classList.toggle('selected', opt === 'join');
+  document.getElementById('form-create').classList.toggle('hidden', opt !== 'create');
+  document.getElementById('form-join').classList.toggle('hidden', opt !== 'join');
+}
+
+function showFamilyAlert(msg, type='error') {
+  const el = document.getElementById('family-alert');
+  el.className = `alert alert-${type}`; el.textContent = msg; el.classList.remove('hidden');
+}
+
+async function doFamilySetup() {
+  const btn = document.getElementById('btn-family');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+
+  if (familyOption === 'create') {
+    const name = document.getElementById('family-name').value.trim();
+    if (!name) { showFamilyAlert('Escribe el nombre de tu familia'); btn.disabled=false; btn.textContent='Continuar'; return; }
+    const { data: family, error: fe } = await sb.from('families').insert({ name }).select().single();
+    if (fe) { showFamilyAlert(fe.message); btn.disabled=false; btn.textContent='Continuar'; return; }
+    await sb.from('profiles').update({ family_id: family.id, role: 'admin' }).eq('id', state.user.id);
+    await createDefaultCategories(family.id);
+    await loadUserData();
+  } else {
+    const code = document.getElementById('invite-code-input').value.trim().toLowerCase();
+    if (!code) { showFamilyAlert('Introduce el código de invitación'); btn.disabled=false; btn.textContent='Continuar'; return; }
+    const { data: family, error: fe } = await sb.from('families').select('*').eq('invite_code', code).single();
+    if (fe || !family) { showFamilyAlert('Código no válido'); btn.disabled=false; btn.textContent='Continuar'; return; }
+    await sb.from('profiles').update({ family_id: family.id, role: 'member' }).eq('id', state.user.id);
+    await loadUserData();
+  }
+  btn.disabled = false; btn.textContent = 'Continuar';
+}
+
+async function createDefaultCategories(familyId) {
+  const cats = [
+    { name:'Alimentación', icon:'🛒', color:'#4ade80' },
+    { name:'Limpieza',     icon:'🧹', color:'#60a5fa' },
+    { name:'Higiene',      icon:'🧴', color:'#a78bfa' },
+    { name:'Farmacia',     icon:'💊', color:'#f87171' },
+    { name:'Ocio',         icon:'🎉', color:'#fbbf24' },
+    { name:'Transporte',   icon:'🚗', color:'#34d399' },
+    { name:'Restaurantes', icon:'🍽️', color:'#fb923c' },
+    { name:'Otros',        icon:'📦', color:'#9ca3af' },
+  ];
+  await sb.from('expense_categories').insert(cats.map(c => ({ ...c, family_id: familyId })));
+}
+
+// ══════════════════════════════════════════
+// TOPBAR
+// ══════════════════════════════════════════
+function renderTopbar() {
+  if (!state.profile || !state.family) return;
+  document.getElementById('topbar-family-name').textContent = state.family.name;
+  const av = document.getElementById('topbar-avatar');
+  av.textContent = (state.profile.display_name || 'U')[0].toUpperCase();
+  av.style.background = state.profile.avatar_color || '#7c6dfa';
+}
+
+// ══════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════
+function navigateTo(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
+  const c = document.getElementById('main-content');
+  if (page === 'inicio')   renderDashboard(c);
+  else if (page === 'perfil')   renderProfile(c);
+  else if (page === 'gastos')   renderComingSoon(c, '💸', 'Control de Gastos',  'Registra y escanea tus tickets. Bloque siguiente.');
+  else if (page === 'despensa') renderComingSoon(c, '🥫', 'Despensa Digital',   'Gestiona el inventario de tu casa. Próximamente.');
+  else if (page === 'compras')  renderComingSoon(c, '🛒', 'Lista de la Compra', 'Listas compartidas en tiempo real. Próximamente.');
+}
+
+// ══════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════
+async function renderDashboard(c) {
+  c.innerHTML = `
+    <div class="page-title">Hola, ${state.profile?.display_name?.split(' ')[0] || 'familia'} 👋</div>
+    <div class="page-subtitle">Familia ${state.family?.name || ''} · ${formatDate(new Date())}</div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Este mes</div><div class="stat-value" id="stat-month">—</div><div class="stat-sub">en gastos</div></div>
+      <div class="stat-card"><div class="stat-label">Esta semana</div><div class="stat-value" id="stat-week">—</div><div class="stat-sub">en gastos</div></div>
+    </div>
+    <div class="section-title">Miembros de la familia</div>
+    <div class="members-list" id="members-list"></div>
+    <div class="section-title">Código de invitación</div>
+    <div class="invite-box">
+      <div style="text-align:center;font-size:0.8rem;color:var(--muted);">Comparte este código para que tu familia se una</div>
+      <div class="invite-code">${state.family?.invite_code?.toUpperCase() || '—'}</div>
+      <button class="btn btn-secondary w-full" onclick="copyInviteCode()">📋 Copiar código</button>
+    </div>
+    <div class="section-title">Miembros activos</div>
+    <div id="activity-feed">
+      <div style="color:var(--muted);font-size:0.875rem;padding:12px 0;">
+        Los gastos y actividad aparecerán aquí cuando empieces a registrar compras.
+      </div>
+    </div>
+  `;
+  renderMembers();
+  await loadDashboardStats();
+}
+
+function renderMembers() {
+  const c = document.getElementById('members-list');
+  if (!c) return;
+  c.innerHTML = state.members.map(m => `
+    <div class="member-item">
+      <div class="avatar" style="background:${m.avatar_color||'#7c6dfa'};width:40px;height:40px;font-size:1rem;">
+        ${(m.display_name||'U')[0].toUpperCase()}
+      </div>
+      <div style="flex:1;">
+        <div class="member-name">${m.display_name}${m.id===state.user?.id?' <span style="color:var(--muted);font-weight:400;font-size:0.8rem;">(tú)</span>':''}</div>
+        <div style="font-size:0.75rem;color:var(--muted);">Se unió ${new Date(m.created_at).toLocaleDateString('es-ES')}</div>
+      </div>
+      <span class="member-role ${m.role==='admin'?'role-admin':'role-member'}">${m.role==='admin'?'👑 Admin':'Miembro'}</span>
+    </div>
+  `).join('');
+}
+
+async function loadDashboardStats() {
+  try {
+    const now = new Date();
+    const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const startWeek  = new Date(now - 7*24*60*60*1000).toISOString().split('T')[0];
+    const { data: me } = await sb.from('expenses').select('total').eq('family_id', state.family.id).gte('date', startMonth);
+    const { data: we } = await sb.from('expenses').select('total').eq('family_id', state.family.id).gte('date', startWeek);
+    const mEl = document.getElementById('stat-month');
+    const wEl = document.getElementById('stat-week');
+    if (mEl) mEl.textContent = formatCurrency((me||[]).reduce((s,e)=>s+parseFloat(e.total),0));
+    if (wEl) wEl.textContent = formatCurrency((we||[]).reduce((s,e)=>s+parseFloat(e.total),0));
+  } catch(e) {}
+}
+
+function copyInviteCode() {
+  navigator.clipboard.writeText(state.family?.invite_code?.toUpperCase()||'')
+    .then(() => showToast('Código copiado ✓'));
+}
+
+// ══════════════════════════════════════════
+// PROFILE
+// ══════════════════════════════════════════
+const COLORS = ['#7c6dfa','#4ade80','#f87171','#fbbf24','#60a5fa','#f472b6','#34d399','#fb923c'];
+let tempColor = null;
+
+function renderProfile(c) {
+  const p = state.profile;
+  c.innerHTML = `
+    <div class="page-title">Mi perfil</div>
+    <div class="page-subtitle">Ajustes personales</div>
+    <div class="profile-header">
+      <div class="avatar-large" id="av-preview" style="background:${p?.avatar_color||'#7c6dfa'};">
+        ${(p?.display_name||'U')[0].toUpperCase()}
+      </div>
+      <div class="color-picker">
+        ${COLORS.map(col=>`<div class="color-dot${p?.avatar_color===col?' selected':''}" style="background:${col}" onclick="pickColor('${col}')"></div>`).join('')}
+      </div>
+    </div>
+    <div class="profile-section">
+      <div class="profile-section-title">✏️ Datos personales</div>
+      <div class="form-group"><label>Nombre</label><input type="text" id="p-name" value="${p?.display_name||''}"></div>
+      <button class="btn btn-primary" onclick="saveProfile()">Guardar cambios</button>
+    </div>
+    <div class="profile-section">
+      <div class="profile-section-title">🚫 Alergias e intolerancias</div>
+      <div class="tags-container" id="tags-allergies">
+        ${(p?.allergies||[]).map(a=>`<span class="tag">${a} <span class="tag-remove" onclick="removeTag('allergies','${a}')">×</span></span>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="in-allergy" placeholder="Ej: Gluten" style="flex:1">
+        <button class="btn btn-secondary" onclick="addTag('allergies')">+</button>
+      </div>
+    </div>
+    <div class="profile-section">
+      <div class="profile-section-title">❤️ Preferencias</div>
+      <div class="tags-container" id="tags-preferences">
+        ${(p?.preferences||[]).map(a=>`<span class="tag">${a} <span class="tag-remove" onclick="removeTag('preferences','${a}')">×</span></span>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="in-pref" placeholder="Ej: Vegetariano" style="flex:1">
+        <button class="btn btn-secondary" onclick="addTag('preferences')">+</button>
+      </div>
+    </div>
+    <div class="profile-section">
+      <div class="profile-section-title">🏡 Mi familia</div>
+      <div style="margin-bottom:4px;font-weight:600;">${state.family?.name}</div>
+      <div style="font-size:0.8rem;color:var(--muted);">${state.members.length} miembro${state.members.length!==1?'s':''} · Código: <strong style="color:var(--accent);letter-spacing:2px;">${state.family?.invite_code?.toUpperCase()}</strong></div>
+    </div>
+    <div style="margin-top:8px;">
+      <button class="btn btn-danger" onclick="doLogout()">Cerrar sesión</button>
+    </div>
+  `;
+}
+
+function pickColor(col) {
+  tempColor = col;
+  document.querySelectorAll('.color-dot').forEach(d => d.classList.toggle('selected', d.style.background===col));
+  const av = document.getElementById('av-preview');
+  if (av) av.style.background = col;
+}
+
+async function saveProfile() {
+  const name = document.getElementById('p-name')?.value.trim();
+  if (!name) return;
+  const updates = { display_name: name };
+  if (tempColor) updates.avatar_color = tempColor;
+  const { error } = await sb.from('profiles').update(updates).eq('id', state.user.id);
+  if (!error) { state.profile = {...state.profile, ...updates}; renderTopbar(); showToast('Perfil guardado ✓'); tempColor=null; }
+  else showToast('Error: ' + error.message, 'error');
+}
+
+async function addTag(type) {
+  const inputId = type==='allergies' ? 'in-allergy' : 'in-pref';
+  const val = document.getElementById(inputId)?.value.trim();
+  if (!val) return;
+  const current = state.profile[type] || [];
+  if (current.includes(val)) { document.getElementById(inputId).value=''; return; }
+  const updated = [...current, val];
+  const { error } = await sb.from('profiles').update({ [type]: updated }).eq('id', state.user.id);
+  if (!error) { state.profile[type]=updated; document.getElementById(inputId).value=''; renderProfile(document.getElementById('main-content')); }
+}
+
+async function removeTag(type, val) {
+  const updated = (state.profile[type]||[]).filter(v=>v!==val);
+  const { error } = await sb.from('profiles').update({ [type]: updated }).eq('id', state.user.id);
+  if (!error) { state.profile[type]=updated; renderProfile(document.getElementById('main-content')); }
+}
+
+// ══════════════════════════════════════════
+// COMING SOON
+// ══════════════════════════════════════════
+function renderComingSoon(c, icon, title, desc) {
+  c.innerHTML = `
+    <div class="coming-soon">
+      <span class="cs-icon">${icon}</span>
+      <span class="cs-badge">Próximamente</span>
+      <h3>${title}</h3>
+      <p>${desc}</p>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════════
+function openModal(html) {
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('modal-overlay'))
+    document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ══════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════
+function showToast(msg, type='success') {
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:${type==='success'?'var(--green)':'var(--red)'};color:#000;padding:10px 20px;border-radius:20px;font-size:0.875rem;font-weight:600;z-index:999;animation:fadeUp 0.3s ease;white-space:nowrap;`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2800);
+}
+
+// ══════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════
+function formatCurrency(v) { return new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(v||0); }
+function formatDate(d) { return d.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}); }
+
+// ══════════════════════════════════════════
+// START
+// ══════════════════════════════════════════
+init();
+</script>
+</body>
+</html>
