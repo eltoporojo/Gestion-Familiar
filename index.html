@@ -773,6 +773,767 @@ function formatDate(d) { return d.toLocaleDateString('es-ES',{weekday:'long',day
 // START
 // ══════════════════════════════════════════
 init();
+  // ══════════════════════════════════════════════════════════════
+// BLOQUE 2 — CONTROL DE GASTOS
+// Pegar justo antes del cierre </script> en homebase.html
+// ══════════════════════════════════════════════════════════════
+
+// ── GOOGLE VISION CONFIG ──────────────────────────────────────
+// Obtén tu API key en: https://console.cloud.google.com/
+// Activa "Cloud Vision API" en tu proyecto
+const GOOGLE_VISION_KEY = 'TU_GOOGLE_VISION_API_KEY';
+
+// ── ESTADO LOCAL DE GASTOS ────────────────────────────────────
+let gastosState = {
+  list: [],
+  categories: [],
+  stores: [],
+  filter: { month: new Date().toISOString().slice(0,7), category: '', store: '' },
+  loading: false
+};
+
+// ══════════════════════════════════════════════════════════════
+// PÁGINA PRINCIPAL DE GASTOS
+// ══════════════════════════════════════════════════════════════
+async function renderGastos(c) {
+  c.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+      <div class="page-title">Gastos</div>
+      <button class="btn btn-primary" style="width:auto;padding:10px 16px;" onclick="openNuevoGasto()">
+        + Añadir
+      </button>
+    </div>
+    <div class="page-subtitle">Registro de compras y tickets</div>
+
+    <!-- Filtros -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;">
+      <input type="month" id="filter-month" value="${gastosState.filter.month}"
+        style="flex:1;min-width:140px;" onchange="applyGastoFilter()">
+      <select id="filter-cat" style="flex:1;min-width:120px;" onchange="applyGastoFilter()">
+        <option value="">Todas las categorías</option>
+      </select>
+      <select id="filter-store" style="flex:1;min-width:120px;" onchange="applyGastoFilter()">
+        <option value="">Todas las tiendas</option>
+      </select>
+    </div>
+
+    <!-- Stats del mes -->
+    <div class="stats-grid" style="margin-bottom:16px;">
+      <div class="stat-card">
+        <div class="stat-label">Total mes</div>
+        <div class="stat-value" id="g-total-mes">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Tickets</div>
+        <div class="stat-value" id="g-num-tickets">—</div>
+        <div class="stat-sub">este mes</div>
+      </div>
+    </div>
+
+    <!-- Lista de gastos -->
+    <div class="section-title">Gastos del mes</div>
+    <div id="gastos-list">
+      <div style="text-align:center;padding:40px;color:var(--muted);">
+        <div style="font-size:2rem;margin-bottom:8px;">⏳</div>
+        Cargando...
+      </div>
+    </div>
+  `;
+
+  await loadCategoriesAndStores();
+  fillFilterSelects();
+  await loadGastos();
+}
+
+async function loadCategoriesAndStores() {
+  const { data: cats }    = await sb.from('expense_categories').select('*').eq('family_id', state.family.id).order('name');
+  const { data: stores }  = await sb.from('stores').select('*').eq('family_id', state.family.id).order('name');
+  gastosState.categories  = cats || [];
+  gastosState.stores      = stores || [];
+}
+
+function fillFilterSelects() {
+  const catSel   = document.getElementById('filter-cat');
+  const storeSel = document.getElementById('filter-store');
+  if (!catSel || !storeSel) return;
+
+  gastosState.categories.forEach(c => {
+    catSel.innerHTML += `<option value="${c.id}">${c.icon} ${c.name}</option>`;
+  });
+  gastosState.stores.forEach(s => {
+    storeSel.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+  });
+
+  if (gastosState.filter.category) catSel.value   = gastosState.filter.category;
+  if (gastosState.filter.store)    storeSel.value = gastosState.filter.store;
+}
+
+function applyGastoFilter() {
+  gastosState.filter.month    = document.getElementById('filter-month')?.value  || gastosState.filter.month;
+  gastosState.filter.category = document.getElementById('filter-cat')?.value    || '';
+  gastosState.filter.store    = document.getElementById('filter-store')?.value  || '';
+  loadGastos();
+}
+
+async function loadGastos() {
+  const { month, category, store } = gastosState.filter;
+  const startDate = month + '-01';
+  const endDate   = new Date(month.split('-')[0], parseInt(month.split('-')[1]), 0)
+                      .toISOString().split('T')[0];
+
+  let query = sb.from('expenses')
+    .select(`*, profiles(display_name, avatar_color), stores(name), expense_lines(*)`)
+    .eq('family_id', state.family.id)
+    .gte('date', startDate)
+    .lte('date', endDate)
+    .order('date', { ascending: false });
+
+  if (store) query = query.eq('store_id', store);
+
+  const { data: expenses } = await query;
+  gastosState.list = expenses || [];
+
+  // Filtro de categoría en cliente (ya que está en expense_lines)
+  let filtered = gastosState.list;
+  if (category) {
+    filtered = filtered.filter(e =>
+      e.expense_lines?.some(l => l.category_id === category)
+    );
+  }
+
+  renderGastosList(filtered);
+  updateGastosStats(filtered);
+}
+
+function updateGastosStats(list) {
+  const total = list.reduce((s, e) => s + parseFloat(e.total), 0);
+  const mEl = document.getElementById('g-total-mes');
+  const nEl = document.getElementById('g-num-tickets');
+  if (mEl) mEl.textContent = formatCurrency(total);
+  if (nEl) nEl.textContent = list.length;
+}
+
+function renderGastosList(list) {
+  const c = document.getElementById('gastos-list');
+  if (!c) return;
+
+  if (!list.length) {
+    c.innerHTML = `
+      <div style="text-align:center;padding:48px 20px;color:var(--muted);">
+        <div style="font-size:2.5rem;margin-bottom:12px;">🧾</div>
+        <div style="font-weight:600;margin-bottom:4px;">Sin gastos este mes</div>
+        <div style="font-size:0.85rem;">Pulsa "+ Añadir" para registrar tu primera compra</div>
+      </div>`;
+    return;
+  }
+
+  // Agrupar por fecha
+  const byDate = {};
+  list.forEach(e => {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push(e);
+  });
+
+  c.innerHTML = Object.entries(byDate).map(([date, expenses]) => `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:0.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;
+                  letter-spacing:1px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);">
+        ${formatDateShort(date)}
+        <span style="float:right;color:var(--text);">
+          ${formatCurrency(expenses.reduce((s,e)=>s+parseFloat(e.total),0))}
+        </span>
+      </div>
+      ${expenses.map(e => renderGastoItem(e)).join('')}
+    </div>
+  `).join('');
+}
+
+function renderGastoItem(e) {
+  const storeName = e.stores?.name || e.store_name || 'Sin tienda';
+  const who       = e.profiles?.display_name || 'Desconocido';
+  const whoColor  = e.profiles?.avatar_color  || '#7c6dfa';
+  const nLines    = e.expense_lines?.length || 0;
+
+  return `
+    <div class="gasto-item" onclick="openGastoDetail('${e.id}')">
+      <div class="gasto-icon">🧾</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${storeName}
+        </div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:6px;">
+          <span class="avatar" style="width:16px;height:16px;font-size:0.5rem;background:${whoColor};">
+            ${who[0].toUpperCase()}
+          </span>
+          ${who} · ${nLines} producto${nLines!==1?'s':''}
+          ${e.ticket_image_url ? ' · 📸' : ''}
+        </div>
+      </div>
+      <div style="font-size:1.1rem;font-weight:800;color:var(--text);flex-shrink:0;">
+        ${formatCurrency(e.total)}
+      </div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════════════
+// DETALLE DE GASTO
+// ══════════════════════════════════════════════════════════════
+async function openGastoDetail(id) {
+  const { data: expense } = await sb.from('expenses')
+    .select(`*, profiles(display_name, avatar_color), stores(name),
+             expense_lines(*, expense_categories(name, icon, color))`)
+    .eq('id', id)
+    .single();
+
+  if (!expense) return;
+
+  const lines = expense.expense_lines || [];
+
+  openModal(`
+    <div class="modal-title">🧾 Detalle del gasto</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+      <div>
+        <div style="font-size:1.4rem;font-weight:800;">${formatCurrency(expense.total)}</div>
+        <div style="color:var(--muted);font-size:0.85rem;margin-top:2px;">
+          ${expense.stores?.name || expense.store_name || 'Sin tienda'} ·
+          ${formatDateShort(expense.date)}
+        </div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-top:4px;">
+          Registrado por <strong style="color:var(--text);">${expense.profiles?.display_name||'?'}</strong>
+        </div>
+      </div>
+      <button class="btn btn-danger" style="width:auto;padding:8px 14px;font-size:0.8rem;"
+        onclick="deleteGasto('${expense.id}')">🗑️ Borrar</button>
+    </div>
+
+    ${expense.ticket_image_url ? `
+      <div style="margin-bottom:16px;">
+        <img src="${expense.ticket_image_url}" style="width:100%;border-radius:10px;border:1px solid var(--border);">
+      </div>` : ''}
+
+    ${lines.length ? `
+      <div class="section-title">Productos (${lines.length})</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${lines.map(l => `
+          <div style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--surface2);border-radius:10px;">
+            <span style="font-size:1.1rem;">${l.expense_categories?.icon || '📦'}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:0.875rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${l.product_name}
+              </div>
+              <div style="font-size:0.75rem;color:var(--muted);">
+                ${l.quantity > 1 ? `${l.quantity} × ` : ''}${formatCurrency(l.unit_price)}
+                ${l.expense_categories ? `· ${l.expense_categories.name}` : ''}
+              </div>
+            </div>
+            <div style="font-weight:700;flex-shrink:0;">${formatCurrency(l.total_price)}</div>
+          </div>
+        `).join('')}
+      </div>
+    ` : `<div style="color:var(--muted);font-size:0.875rem;text-align:center;padding:12px;">Sin líneas de detalle</div>`}
+
+    ${expense.notes ? `<div style="margin-top:12px;padding:10px 14px;background:var(--surface2);border-radius:10px;font-size:0.85rem;color:var(--muted);">📝 ${expense.notes}</div>` : ''}
+  `);
+}
+
+async function deleteGasto(id) {
+  if (!confirm('¿Borrar este gasto? No se puede deshacer.')) return;
+  await sb.from('expense_lines').delete().eq('expense_id', id);
+  await sb.from('expenses').delete().eq('id', id);
+  closeModal();
+  showToast('Gasto eliminado');
+  loadGastos();
+}
+
+// ══════════════════════════════════════════════════════════════
+// FORMULARIO NUEVO GASTO
+// ══════════════════════════════════════════════════════════════
+let nuevoGasto = {
+  store_name: '',
+  store_id: null,
+  date: new Date().toISOString().split('T')[0],
+  total: '',
+  notes: '',
+  lines: [],
+  ticket_image_url: null
+};
+
+function openNuevoGasto() {
+  nuevoGasto = {
+    store_name: '', store_id: null,
+    date: new Date().toISOString().split('T')[0],
+    total: '', notes: '', lines: [], ticket_image_url: null
+  };
+  renderNuevoGastoModal();
+}
+
+function renderNuevoGastoModal() {
+  const storeOptions = gastosState.stores.map(s =>
+    `<option value="${s.id}" data-name="${s.name}">${s.name}</option>`
+  ).join('');
+
+  openModal(`
+    <div class="modal-title">➕ Nuevo gasto</div>
+
+    <!-- Escanear ticket -->
+    <div style="margin-bottom:20px;">
+      <div style="font-size:0.8rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">
+        📸 Escanear ticket (opcional)
+      </div>
+      <div style="display:flex;gap:8px;">
+        <label style="flex:1;cursor:pointer;">
+          <div class="btn btn-secondary w-full" style="text-transform:none;font-size:0.875rem;">
+            📷 Hacer foto / subir imagen
+          </div>
+          <input type="file" accept="image/*" capture="environment" id="ticket-input"
+            style="display:none;" onchange="processTicketImage(this)">
+        </label>
+      </div>
+      <div id="ticket-preview" style="margin-top:8px;"></div>
+      <div id="ocr-status" style="margin-top:6px;font-size:0.8rem;color:var(--accent);"></div>
+    </div>
+
+    <!-- Datos básicos -->
+    <div class="form-group">
+      <label>Tienda</label>
+      <select id="ng-store-select" onchange="onStoreSelect(this)" style="margin-bottom:8px;">
+        <option value="">— Selecciona o escribe abajo —</option>
+        ${storeOptions}
+        <option value="__new__">+ Nueva tienda...</option>
+      </select>
+      <input type="text" id="ng-store-name" placeholder="Nombre de la tienda"
+        value="${nuevoGasto.store_name}">
+    </div>
+    <div style="display:flex;gap:8px;">
+      <div class="form-group" style="flex:1;">
+        <label>Fecha</label>
+        <input type="date" id="ng-date" value="${nuevoGasto.date}">
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label>Total (€)</label>
+        <input type="number" id="ng-total" placeholder="0.00" step="0.01" value="${nuevoGasto.total}">
+      </div>
+    </div>
+
+    <!-- Líneas de productos -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:0.8rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">
+        Productos
+      </div>
+      <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem;" onclick="addLineaGasto()">
+        + Línea
+      </button>
+    </div>
+    <div id="ng-lines"></div>
+
+    <div class="form-group" style="margin-top:8px;">
+      <label>Notas (opcional)</label>
+      <input type="text" id="ng-notes" placeholder="Ej: Compra semanal">
+    </div>
+
+    <button class="btn btn-primary mt-4" onclick="saveNuevoGasto()" id="btn-save-gasto">
+      💾 Guardar gasto
+    </button>
+  `);
+
+  renderLineasGasto();
+}
+
+function onStoreSelect(sel) {
+  const val = sel.value;
+  if (val === '__new__') {
+    sel.value = '';
+    document.getElementById('ng-store-name').value = '';
+    document.getElementById('ng-store-name').focus();
+    nuevoGasto.store_id = null;
+  } else if (val) {
+    const opt = sel.options[sel.selectedIndex];
+    nuevoGasto.store_id   = val;
+    nuevoGasto.store_name = opt.dataset.name || '';
+    document.getElementById('ng-store-name').value = nuevoGasto.store_name;
+  }
+}
+
+function addLineaGasto(productName='', unitPrice='', qty=1, categoryId='') {
+  nuevoGasto.lines.push({ product_name: productName, unit_price: unitPrice, quantity: qty, category_id: categoryId });
+  renderLineasGasto();
+}
+
+function removeLinea(idx) {
+  nuevoGasto.lines.splice(idx, 1);
+  renderLineasGasto();
+}
+
+function renderLineasGasto() {
+  const c = document.getElementById('ng-lines');
+  if (!c) return;
+
+  if (!nuevoGasto.lines.length) {
+    c.innerHTML = `<div style="text-align:center;padding:16px;color:var(--muted);font-size:0.85rem;background:var(--surface2);border-radius:10px;margin-bottom:8px;">Sin productos · puedes guardar solo el total</div>`;
+    return;
+  }
+
+  const catOptions = gastosState.categories.map(cat =>
+    `<option value="${cat.id}">${cat.icon} ${cat.name}</option>`
+  ).join('');
+
+  c.innerHTML = nuevoGasto.lines.map((l, i) => `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <input type="text" placeholder="Producto" value="${l.product_name}"
+          style="flex:2;" oninput="updateLinea(${i},'product_name',this.value)">
+        <button onclick="removeLinea(${i})" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:1.1rem;padding:0 4px;">×</button>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input type="number" placeholder="Cant." value="${l.quantity}" step="0.001" min="0.001"
+          style="flex:1;" oninput="updateLinea(${i},'quantity',parseFloat(this.value)||1)">
+        <input type="number" placeholder="€/ud" value="${l.unit_price}" step="0.01" min="0"
+          style="flex:1;" oninput="updateLinea(${i},'unit_price',this.value)">
+        <select style="flex:2;" onchange="updateLinea(${i},'category_id',this.value)">
+          <option value="">Categoría</option>
+          ${catOptions}
+        </select>
+      </div>
+      ${l.unit_price && l.quantity ? `
+        <div style="text-align:right;font-size:0.78rem;color:var(--muted);margin-top:4px;">
+          Total: <strong style="color:var(--text);">${formatCurrency(parseFloat(l.unit_price)*parseFloat(l.quantity))}</strong>
+        </div>` : ''}
+    </div>
+  `).join('');
+
+  // Restaurar valores de categoría
+  nuevoGasto.lines.forEach((l, i) => {
+    const selects = c.querySelectorAll('select');
+    if (selects[i] && l.category_id) selects[i].value = l.category_id;
+  });
+
+  // Recalcular total automático
+  const total = nuevoGasto.lines.reduce((s, l) =>
+    s + (parseFloat(l.unit_price) || 0) * (parseFloat(l.quantity) || 1), 0
+  );
+  if (total > 0) {
+    const totalInput = document.getElementById('ng-total');
+    if (totalInput && !totalInput.value) totalInput.value = total.toFixed(2);
+  }
+}
+
+function updateLinea(idx, field, value) {
+  nuevoGasto.lines[idx][field] = value;
+  // Re-render solo el total de línea sin re-renderizar todo
+  renderLineasGasto();
+}
+
+// ══════════════════════════════════════════════════════════════
+// GOOGLE VISION OCR
+// ══════════════════════════════════════════════════════════════
+async function processTicketImage(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  // Preview
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('ticket-preview').innerHTML = `
+      <img src="${e.target.result}" style="width:100%;max-height:200px;object-fit:cover;border-radius:10px;border:1px solid var(--border);">
+    `;
+  };
+  reader.readAsDataURL(file);
+
+  const statusEl = document.getElementById('ocr-status');
+  statusEl.textContent = '🔍 Leyendo ticket con Google Vision...';
+
+  try {
+    // Convertir a base64
+    const base64 = await fileToBase64(file);
+
+    // Llamada a Google Vision API
+    const response = await fetch(
+      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: [{
+            image: { content: base64 },
+            features: [{ type: 'TEXT_DETECTION', maxResults: 1 }]
+          }]
+        })
+      }
+    );
+
+    const data = await response.json();
+    const text = data.responses?.[0]?.fullTextAnnotation?.text || '';
+
+    if (!text) {
+      statusEl.textContent = '⚠️ No se pudo leer el texto. Introduce los datos manualmente.';
+      return;
+    }
+
+    statusEl.textContent = '✅ Ticket leído. Procesando...';
+
+    // Parsear el texto del ticket
+    const parsed = parseTicketText(text);
+
+    // Subir imagen a Supabase Storage
+    const imagePath = await uploadTicketImage(file);
+    nuevoGasto.ticket_image_url = imagePath;
+
+    // Rellenar formulario con datos extraídos
+    if (parsed.storeName) {
+      document.getElementById('ng-store-name').value = parsed.storeName;
+      nuevoGasto.store_name = parsed.storeName;
+    }
+    if (parsed.date) {
+      document.getElementById('ng-date').value = parsed.date;
+      nuevoGasto.date = parsed.date;
+    }
+    if (parsed.total) {
+      document.getElementById('ng-total').value = parsed.total;
+    }
+    if (parsed.lines.length) {
+      nuevoGasto.lines = parsed.lines;
+      renderLineasGasto();
+    }
+
+    statusEl.innerHTML = `✅ <strong>${parsed.lines.length} productos detectados</strong>. Revisa y ajusta si hace falta.`;
+
+  } catch (err) {
+    statusEl.textContent = '❌ Error al procesar la imagen: ' + err.message;
+    console.error(err);
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('Error leyendo archivo'));
+    r.readAsDataURL(file);
+  });
+}
+
+function parseTicketText(text) {
+  const lines  = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const result = { storeName: '', date: '', total: '', lines: [] };
+
+  // Detectar nombre de tienda (suele estar en las primeras líneas)
+  const knownStores = ['mercadona','lidl','carrefour','alcampo','dia','eroski','aldi','consum','hipercor','el corte inglés','coviran'];
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    const lower = lines[i].toLowerCase();
+    const found = knownStores.find(s => lower.includes(s));
+    if (found) { result.storeName = found.charAt(0).toUpperCase() + found.slice(1); break; }
+    if (i < 2 && lines[i].length > 3 && lines[i].length < 40) result.storeName = lines[i];
+  }
+
+  // Detectar fecha (formatos: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD)
+  const dateRegex = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/;
+  for (const line of lines) {
+    const m = line.match(dateRegex);
+    if (m) {
+      let [, d, mo, y] = m;
+      if (y.length === 2) y = '20' + y;
+      if (parseInt(d) > 12) { // DD/MM/YYYY
+        result.date = `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      } else {
+        result.date = `${y}-${d.padStart(2,'0')}-${mo.padStart(2,'0')}`;
+      }
+      break;
+    }
+  }
+
+  // Detectar total
+  const totalKeywords = ['total','importe','a pagar','total a pagar','suma'];
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (totalKeywords.some(k => lower.includes(k))) {
+      const priceMatch = line.match(/(\d+[.,]\d{2})/);
+      if (priceMatch) { result.total = priceMatch[1].replace(',','.'); break; }
+    }
+  }
+  // Si no encontró total por keyword, buscar el número más alto
+  if (!result.total) {
+    let maxPrice = 0;
+    lines.forEach(line => {
+      const m = line.match(/(\d+)[,.](\d{2})$/);
+      if (m) {
+        const val = parseFloat(m[1] + '.' + m[2]);
+        if (val > maxPrice) { maxPrice = val; result.total = val.toFixed(2); }
+      }
+    });
+  }
+
+  // Detectar líneas de producto
+  // Patrón: texto + precio al final de la línea
+  const skipKeywords = ['total','subtotal','iva','dto','descuento','tarjeta','efectivo','cambio','ticket','fecha','hora','cajero','cif','nif'];
+  lines.forEach(line => {
+    const lower = line.toLowerCase();
+    if (skipKeywords.some(k => lower.includes(k))) return;
+
+    const priceMatch = line.match(/(.+?)\s+(\d+)[,.](\d{2})\s*[€]?$/);
+    if (priceMatch) {
+      const name  = priceMatch[1].trim();
+      const price = parseFloat(priceMatch[2] + '.' + priceMatch[3]);
+      if (name.length >= 2 && price > 0 && price < 1000) {
+        result.lines.push({
+          product_name: name,
+          unit_price:   price.toFixed(2),
+          quantity:     1,
+          category_id:  ''
+        });
+      }
+    }
+  });
+
+  return result;
+}
+
+async function uploadTicketImage(file) {
+  try {
+    const ext  = file.name.split('.').pop() || 'jpg';
+    const path = `tickets/${state.family.id}/${Date.now()}.${ext}`;
+    const { data, error } = await sb.storage.from('homebase').upload(path, file, { upsert: true });
+    if (error) return null;
+    const { data: urlData } = sb.storage.from('homebase').getPublicUrl(path);
+    return urlData?.publicUrl || null;
+  } catch { return null; }
+}
+
+// ══════════════════════════════════════════════════════════════
+// GUARDAR GASTO
+// ══════════════════════════════════════════════════════════════
+async function saveNuevoGasto() {
+  const storeName = document.getElementById('ng-store-name')?.value.trim();
+  const date      = document.getElementById('ng-date')?.value;
+  const totalStr  = document.getElementById('ng-total')?.value;
+  const notes     = document.getElementById('ng-notes')?.value.trim();
+
+  if (!storeName) { showToast('Indica la tienda', 'error'); return; }
+  if (!date)      { showToast('Indica la fecha',  'error'); return; }
+  if (!totalStr)  { showToast('Indica el total',  'error'); return; }
+
+  const total = parseFloat(totalStr);
+  if (isNaN(total) || total <= 0) { showToast('Total no válido', 'error'); return; }
+
+  const btn = document.getElementById('btn-save-gasto');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+
+  try {
+    // 1. Buscar o crear tienda
+    let storeId = nuevoGasto.store_id;
+    if (!storeId) {
+      const existing = gastosState.stores.find(s => s.name.toLowerCase() === storeName.toLowerCase());
+      if (existing) {
+        storeId = existing.id;
+      } else {
+        const { data: newStore } = await sb.from('stores')
+          .insert({ name: storeName, family_id: state.family.id })
+          .select().single();
+        storeId = newStore?.id || null;
+        if (newStore) gastosState.stores.push(newStore);
+      }
+    }
+
+    // 2. Crear gasto
+    const { data: expense, error: expErr } = await sb.from('expenses').insert({
+      family_id:         state.family.id,
+      created_by:        state.user.id,
+      store_id:          storeId,
+      store_name:        storeName,
+      date,
+      total,
+      notes:             notes || null,
+      ticket_image_url:  nuevoGasto.ticket_image_url || null
+    }).select().single();
+
+    if (expErr) throw expErr;
+
+    // 3. Crear líneas
+    if (nuevoGasto.lines.length) {
+      const linesData = nuevoGasto.lines
+        .filter(l => l.product_name && l.unit_price)
+        .map(l => ({
+          expense_id:   expense.id,
+          product_name: l.product_name,
+          quantity:     parseFloat(l.quantity) || 1,
+          unit_price:   parseFloat(l.unit_price),
+          total_price:  (parseFloat(l.unit_price) || 0) * (parseFloat(l.quantity) || 1),
+          category_id:  l.category_id || null
+        }));
+
+      if (linesData.length) {
+        await sb.from('expense_lines').insert(linesData);
+
+        // 4. Guardar historial de precios por tienda
+        if (storeId) {
+          const priceData = linesData
+            .filter(l => l.product_name)
+            .map(l => ({
+              family_id:  state.family.id,
+              store_id:   storeId,
+              product_id: null, // se puede vincular después
+              price:      l.unit_price,
+              date,
+            }));
+          // Solo guardamos si hay datos válidos
+          if (priceData.length) await sb.from('price_history').insert(priceData).then(() => {});
+        }
+      }
+    }
+
+    closeModal();
+    showToast('✅ Gasto guardado');
+    await loadGastos();
+
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+    btn.disabled = false; btn.textContent = '💾 Guardar gasto';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// CSS ADICIONAL para las tarjetas de gasto
+// (se inyecta automáticamente al cargar este bloque)
+// ══════════════════════════════════════════════════════════════
+(function injectGastosCSS() {
+  const style = document.createElement('style');
+  style.textContent = `
+    .gasto-item {
+      display: flex; align-items: center; gap: 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px;
+      cursor: pointer; transition: all 0.2s; margin-bottom: 8px;
+    }
+    .gasto-item:hover { border-color: var(--accent); transform: translateX(2px); }
+    .gasto-icon { font-size: 1.5rem; flex-shrink: 0; }
+  `;
+  document.head.appendChild(style);
+})();
+
+// ══════════════════════════════════════════════════════════════
+// SOBREESCRIBIR navigateTo para añadir gastos
+// ══════════════════════════════════════════════════════════════
+const _navigateToOriginal = navigateTo;
+navigateTo = function(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === page));
+  const c = document.getElementById('main-content');
+  if      (page === 'inicio')   renderDashboard(c);
+  else if (page === 'gastos')   renderGastos(c);
+  else if (page === 'perfil')   renderProfile(c);
+  else if (page === 'despensa') renderComingSoon(c, '🥫', 'Despensa Digital',   'Gestiona el inventario de tu casa. Próximo bloque.');
+  else if (page === 'compras')  renderComingSoon(c, '🛒', 'Lista de la Compra', 'Listas compartidas en tiempo real. Próximo bloque.');
+};
+
+// ══════════════════════════════════════════════════════════════
+// UTILS adicionales
+// ══════════════════════════════════════════════════════════════
+function formatDateShort(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('es-ES', { weekday:'short', day:'numeric', month:'short' });
+}
+
+// ── FIN BLOQUE 2 ──────────────────────────────────────────────
 </script>
 </body>
 </html>
